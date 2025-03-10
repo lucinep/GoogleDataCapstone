@@ -1,0 +1,103 @@
+#Load the dataset into BigQuery and take a look at the Scheme and Type for each column
+#I noticed that the ride_length column didn't transfer correctly into SQL (it came in as a string instead of a numeric). Let's fix that.
+#Because the two columns used to measure ride_length (started_at and ended_at) are in TIMESTAMP format, we can directly fix ride_length within SQL:
+
+UPDATE `serene-exchange-429023-a1.Bike_Trips.Bike_Trips`
+SET ride_length = COALESCE(TIMESTAMP_DIFF(CAST(ended_at AS TIMESTAMP), CAST(started_at AS TIMESTAMP), MINUTE), 0)
+WHERE started_at IS NOT NULL
+  AND ended_at IS NOT NULL
+
+#However, I am using a free trial of BigQuery and cannot use DML statements to update rows/columns. So, here is a workaround: Calculate the ride_length directly in the query and display the results without needing to update the table
+SELECT *,
+       COALESCE(TIMESTAMP_DIFF(CAST(ended_at AS TIMESTAMP), CAST(started_at AS TIMESTAMP), MINUTE), 0) AS ride_length_minutes
+FROM `serene-exchange-429023-a1.Bike_Trips.Bike_Trips`
+WHERE started_at IS NOT NULL
+  AND ended_at IS NOT NULL
+
+#Then I went ahead and saved it as a new table, titled Bike_Trips_Updated.
+
+#I'm curious to see on which days of the week riders rode for over 5 minutes.
+
+SELECT day_of_week, ride_length_1
+FROM `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE ride_length_1 > 5
+
+#After taking a look at the results, I decided it would be interesting to see what the difference in ride time was between casual riders and members
+
+SELECT member_casual, day_of_week, AVG(ride_length_minutes) AS avg_ride_length
+FROM `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE ride_length_1 > 5
+GROUP BY member_casual, day_of_week
+ORDER BY avg_ride_length DESC
+
+#The result is 14 rows - one for each day of the week for the two member types. Let's create some summary statistics:
+
+SELECT
+    member_casual,
+    day_of_week,
+    AVG(ride_length_minutes) AS avg_ride_length,
+    MIN(ride_length_minutes) AS min_ride_length,
+    MAX(ride_length_minutes) AS max_ride_length,
+    APPROX_QUANTILES(ride_length_minutes, 2)[OFFSET(1)] AS median_ride_length,
+    STDDEV(ride_length_minutes) AS stddev_ride_length
+FROM
+    `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE
+    ride_length_minutes > 5
+GROUP BY
+    member_casual,
+    day_of_week
+ORDER BY
+    member_casual,
+    day_of_week
+
+
+#Based on the data, it looks like members use their bikes for shorter trips, and casual riders take extended rides. However, the standard deviation data shows some pretty large skewing of numbers for the casual members, so I'm going to put some limits in place to handle the outliers:
+
+SELECT *
+FROM
+    `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE
+    ride_length_minutes > 10000
+
+#The above query shows that 67 entries are above 10,000 minute rides - that's over 166 hour rides, which is more time than is available in a day. These outliers might be data errors; for the sake of this analysis, I will limit rides to 500 minutes (8 hours) at most:
+
+SELECT
+    member_casual,
+    day_of_week,
+    AVG(ride_length_minutes) AS avg_ride_length,
+    MIN(ride_length_minutes) AS min_ride_length,
+    MAX(ride_length_minutes) AS max_ride_length,
+    APPROX_QUANTILES(ride_length_minutes, 2)[OFFSET(1)] AS median_ride_length,
+    STDDEV(ride_length_minutes) AS stddev_ride_length
+FROM
+    `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE
+    ride_length_minutes > 5 AND ride_length_minutes < 200
+GROUP BY
+    member_casual,
+    day_of_week
+ORDER BY
+    member_casual,
+    day_of_week
+
+#Create a new table with the results of the above summary statistics:
+CREATE TABLE `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Summary` AS
+SELECT
+    member_casual,
+    day_of_week,
+    AVG(ride_length_minutes) AS avg_ride_length,
+    MIN(ride_length_minutes) AS min_ride_length,
+    MAX(ride_length_minutes) AS max_ride_length,
+    APPROX_QUANTILES(ride_length_minutes, 2)[OFFSET(1)] AS median_ride_length,
+    STDDEV(ride_length_minutes) AS stddev_ride_length
+FROM
+    `serene-exchange-429023-a1.Bike_Trips.Bike_Trips_Updated`
+WHERE
+    ride_length_minutes > 5 AND ride_length_minutes < 200
+GROUP BY
+    member_casual,
+    day_of_week
+ORDER BY
+    member_casual,
+    day_of_week;
